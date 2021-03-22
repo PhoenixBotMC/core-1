@@ -50,6 +50,18 @@ type Query {
     populate_players: String
   ): Guild
 
+  guild_by_id(
+    """
+    ID of guild.
+    """
+    guild_id: String!
+
+    """
+    Replace uuid fields with player profiles
+    """
+    populate_players: String
+  ): Guild
+
   """
   Returns player or guild leaderboards
 
@@ -986,7 +998,7 @@ type BuildBattle {
   """
   Win Ratio
   """
-  w_r: Int
+  w_r: Float
 
   """
   Wins in all Build Battle modes

@@ -313,7 +313,7 @@ const getData = fromPromise(async (redis, url) => {
 
   url = {
     delay: Number(config.DEFAULT_DELAY),
-    timeout: 20000,
+    timeout: 5000,
     retries: 10,
     ...url,
   };
@@ -411,6 +411,7 @@ function generateFormattedRank(rank, plusColor, prefix, plusPlusColor) {
     ['MVP_PLUS_PLUS', `${plusPlusColor}[MVP${plusColor}++${plusPlusColor}]`],
     ['HELPER', '&9[HELPER]'],
     ['MODERATOR', '&2[MOD]'],
+    ['GAME_MASTER', '&2[GM]'],
     ['ADMIN', '&c[ADMIN]'],
     ['YOUTUBER', '&c[&fYOUTUBE&c]'],
   ]);

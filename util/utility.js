@@ -228,6 +228,11 @@ function generateJob(type, payload) {
         url: `${apiUrl}/boosters?key=${apiKey}`,
       };
     },
+    counts() {
+      return {
+        url: `${apiUrl}/counts?key=${apiKey}`,
+      };
+    },
     findguild() {
       return {
         url: `${apiUrl}/findguild?key=${apiKey}&byUuid=${payload.id}`,
@@ -320,7 +325,7 @@ const getData = fromPromise(async (redis, url) => {
 
   const urlData = urllib.parse(url.url, true);
   const isHypixelApi = urlData.host === 'api.hypixel.net';
-  const isMojangApi = urlData.host === 'api.mojang.com';
+  const isMojangApi = urlData.host === 'playerdb.co';
 
   const target = urllib.format(urlData);
 
@@ -328,7 +333,7 @@ const getData = fromPromise(async (redis, url) => {
 
   try {
     const { body } = await got(target, {
-      responseType: isHypixelApi ? 'json' : 'text',
+      responseType: 'json',
       timeout: url.timeout,
       retry: url.retries,
       hooks: {
@@ -346,6 +351,9 @@ const getData = fromPromise(async (redis, url) => {
                 logger.error(error);
               }
             }
+            if (isMojangApi) {
+              throw new Error('Failed to get player uuid');
+            }
           },
         ],
       },
@@ -355,9 +363,6 @@ const getData = fromPromise(async (redis, url) => {
   } catch (error) {
     if (url.noRetry) {
       throw new Error('Invalid response');
-    }
-    if (isMojangApi) {
-      throw new Error('Failed to get player uuid');
     }
     if (error.response && error.response.statusCode) {
       switch (error.response.statusCode) {

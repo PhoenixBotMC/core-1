@@ -4,45 +4,19 @@
  */
 const redis = require('./redis');
 const processSkyBlock = require('../processors/processSkyBlock');
-const cachedFunction = require('./cachedFunction');
 // const { insertSkyBlockProfile } = require('./queries');
 const { logger, generateJob, getData } = require('../util/utility');
 
-async function getProfileData(id) {
-  try {
-    const body = await getData(redis, generateJob('skyblock_profile', {
-      id,
-    }).url);
-    return processSkyBlock((body || {}).profile || {});
-  } catch (error) {
-    logger.error(`Failed getting skyblock profile: ${error.message}`);
-  }
-}
-
 function getLatestProfile(profiles) {
-  return Object.entries(profiles).sort((a, b) => b[1].last_save - a[1].last_save)[0];
+  return Object.entries(profiles).find(([profile]) => profiles[profile].selected);
 }
 
 async function updateProfileList(key, profiles) {
   try {
-    await redis.setex(key, 3 * 24 * 60 * 60, JSON.stringify(profiles)); // Expire after 3 days
+    await redis.setex(key, 600, JSON.stringify(profiles)); // Expire after 10 minutes
   } catch (error) {
     logger.error(`Failed to update profile list: ${error}`);
   }
-}
-
-// Destruct some properties from profiles for overview
-function getStats({
-  first_join = null,
-  last_save = null,
-  collections_unlocked = 0,
-}, members = {}) {
-  return {
-    first_join,
-    last_save,
-    collections_unlocked,
-    members: Object.keys(members),
-  };
 }
 
 /*
@@ -59,10 +33,10 @@ async function buildProfileList(uuid) {
     if (profiles === null) {
       return {};
     }
-    profiles.forEach((profile) => {
-      const { cute_name, members } = profile;
-      newProfiles[profile.profile_id] = { cute_name, ...getStats(members[uuid] || {}, members) };
-    });
+    await Promise.all(profiles.map(async (profile) => {
+      const { profile_id } = profile;
+      newProfiles[profile_id] = { ...await processSkyBlock(profile) };
+    }));
     updateProfileList(key, newProfiles);
     return newProfiles;
   } catch (error) {
@@ -80,6 +54,9 @@ async function buildProfile(uuid, id = null) {
   } else {
     profiles = await buildProfileList(uuid);
   }
+  if (Object.entries(profiles).length === 0) {
+    return {};
+  }
   // If no id is specified, use last played profile
   if (id === null) {
     [profile_id] = getLatestProfile(profiles);
@@ -91,12 +68,11 @@ async function buildProfile(uuid, id = null) {
     throw new Error('Profile not found!');
   }
 
-  // eslint-disable-next-line arrow-body-style
-  return cachedFunction(`skyblock_profile:${profile_id}`, async () => {
-    // insertSkyBlockProfile(profile);
+  if (profile_id in profiles) {
+    return profiles[profile_id];
+  }
 
-    return getProfileData(profile_id);
-  }, { cacheDuration: 600 });
+  return {};
 }
 
 module.exports = {

@@ -4,25 +4,24 @@ const filterObject = require('filter-obj');
 const constants = require('hypixelconstants');
 const redis = require('../store/redis');
 const buildPlayerStatus = require('../store/buildPlayerStatus');
-const buildPlayerFriends = require('../store/buildPlayerFriends');
 const getUUID = require('../store/getUUID');
 const buildBans = require('../store/buildBans');
 const buildBoosters = require('../store/buildBoosters');
 const buildCounts = require('../store/buildCounts');
-const { queryAuctionId } = require('../store/queryAuctions');
-const { getGuildFromPlayer, getGuildFromName, getGuildFromID } = require('../store/buildGuild');
+const { getAuctions } = require('../store/queryAuctions');
+const buildGuild = require('../store/buildGuild');
 const { buildProfileList, buildProfile } = require('../store/buildSkyBlockProfiles');
+const { buildSkyblockCalendar, buildSkyblockEvents } = require('../store/buildSkyblockCalendar');
 const { playerObject } = require('./objects');
 const { populatePlayers, getPlayer, PlayerError } = require('../store/buildPlayer');
 const { getMetadata } = require('../store/queries');
 const {
-  logger, generateJob, getData, typeToStandardName, getPlayerFields,
+  logger, generateJob, getData, typeToCleanName, getPlayerFields,
 } = require('../util/utility');
 const {
-  playerNameParam, gameNameParam, typeParam, columnParam, filterParam, sortByParam,
-  limitParam, significantParam, populatePlayersParam, templateParam, itemIdParam, bazaarItemIdParam,
-  fromParam, toParam, auctionUUIDParam, itemUUIDParam, activeParam, pageParam, sortOrderParam,
-  profileIdParam, guildNameParam, guildIDParam,
+  playerNameParam, gameNameParam, limitParam, populatePlayersParam, bazaarItemIdParam,
+  auctionUUIDParam, pageParam, sortOrderParam, profileIdParam, guildNameParam, guildIDParam,
+  calendarEventsParam, calendarFromParam, calendarToParam, calendarYearsParam, calendarStopAtYearEndParam,
 } = require('./parameters');
 const packageJson = require('../package.json');
 
@@ -242,9 +241,9 @@ The Slothpixel API provides Hypixel related data.
 Currently the API has a rate limit of **60 requests/minute** and **50,000 requests per month**. If you have higher data needs contact the admins on discord.
 
 Consider supporting The Slothpixel Project on Patreon to help cover the hosting costs.
-    
-[Discord](https://discord.gg/ND9bJKK) | [Patreon](https://patreon.com/slothpixel)  
-    
+
+[Discord](https://discord.gg/ND9bJKK) | [Patreon](https://patreon.com/slothpixel)
+
 # GraphQL
     Slothpixel API supports the use of GraphQL query language, and it is recommended for advanced users. [Read more](https://github.com/slothpixel/core/wiki/GraphQL)
     `,
@@ -261,9 +260,9 @@ Consider supporting The Slothpixel Project on Patreon to help cover the hosting 
         type: 'apiKey',
         name: 'key',
         description: `Use an API key to remove monthly call limits and to receive higher rate limits.
-      
+
       Usage example: https://api.slothpixel.me/api/players/slothpixel?key=YOUR-API-KEY
-      
+
       API key can also be sent using the authorization header "Authorization: Bearer YOUR-API-KEY"
       `,
         in: 'query',
@@ -289,10 +288,6 @@ Consider supporting The Slothpixel Project on Patreon to help cover the hosting 
       description: 'SkyBlock related data',
     },
     {
-      name: 'leaderboards',
-      description: 'Player leaderboards',
-    },
-    {
       name: 'boosters',
       description: 'List of Boosters',
     },
@@ -304,6 +299,11 @@ Consider supporting The Slothpixel Project on Patreon to help cover the hosting 
       name: 'counts',
       description: 'Player counts',
     },
+    /*
+    {
+      name: 'leaderboards',
+      description: 'Player leaderboards',
+    },
     {
       name: 'metadata',
       description: 'Serivce metadata',
@@ -312,6 +312,7 @@ Consider supporting The Slothpixel Project on Patreon to help cover the hosting 
       name: 'health',
       description: 'Service health',
     },
+     */
   ],
   paths: {
     '/players/{playerName}': {
@@ -396,6 +397,10 @@ Consider supporting The Slothpixel Project on Patreon to help cover the hosting 
                       type: 'integer',
                       description: 'Total achievement points',
                     },
+                    legacy_achievement_points: {
+                      type: 'integer',
+                      description: 'Total legacy achievement points',
+                    },
                     completed_tiered: {
                       type: 'integer',
                       description: 'Total tiered achievements completed',
@@ -427,11 +432,32 @@ Consider supporting The Slothpixel Project on Patreon to help cover the hosting 
                             type: 'string',
                           },
                         },
-                        tiered: {
+                        legacy: {
                           type: 'array',
                           items: {
-                            description: 'Achievement name',
-                            type: 'integer',
+                            description: 'All legacy achievements a player has.',
+                            type: 'string',
+                          },
+                        },
+                        tiered: {
+                          type: 'object',
+                          achievement_name: {
+                            current_tier: {
+                              description: 'Current Tier of tiered achievement',
+                              type: 'integer',
+                            },
+                            current_amount: {
+                              description: 'Current amount of tiered achievement',
+                              type: 'integer',
+                            },
+                            max_tier: {
+                              description: 'Max tier of tiered achievement',
+                              type: 'integer',
+                            },
+                            max_tier_amount: {
+                              description: 'Max amount of tiered achievement',
+                              type: 'integer',
+                            },
                           },
                         },
                         completed: {
@@ -456,6 +482,10 @@ Consider supporting The Slothpixel Project on Patreon to help cover the hosting 
                         },
                         points_one_time: {
                           description: 'Total achievement points from one time achievements in the game',
+                          type: 'integer',
+                        },
+                        points_legacy: {
+                          description: 'Total achievement points from legacy achievements in the game',
                           type: 'integer',
                         },
                       },
@@ -580,60 +610,9 @@ Consider supporting The Slothpixel Project on Patreon to help cover the hosting 
             try {
               const { games } = await getData(redis, generateJob('recentgames', { id: uuid }).url);
               response.json(games.map((game) => {
-                game.gameType = typeToStandardName(game.gameType);
+                game.gameType = typeToCleanName(game.gameType);
                 return game;
               }));
-            } catch (error) {
-              callback(error.message);
-            }
-          } catch (error) {
-            response.status(404).json({ error: error.message });
-          }
-        },
-      },
-    },
-    '/players/{playerName}/friends': {
-      get: {
-        summary: 'Get friends for a given player',
-        description: 'Returns friendships for given player.',
-        operationId: 'getPlayerFriends',
-        tags: [
-          'player',
-        ],
-        parameters: [
-          playerNameParam,
-        ],
-        responses: {
-          200: {
-            description: 'successful operation',
-            content: {
-              'application/json': {
-                schema: {
-                  type: 'array',
-                  items: {
-                    type: 'object',
-                    properties: {
-                      uuid: {
-                        type: 'string',
-                      },
-                      sent_by: {
-                        type: 'string',
-                      },
-                      started: {
-                        type: 'integer',
-                      },
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-        route: () => '/players/:player/friends',
-        func: async (request, response, callback) => {
-          try {
-            try {
-              response.json(await buildPlayerFriends(request.params.player));
             } catch (error) {
               callback(error.message);
             }
@@ -715,6 +694,10 @@ Consider supporting The Slothpixel Project on Patreon to help cover the hosting 
                 schema: {
                   type: 'object',
                   properties: {
+                    guild: {
+                      description: 'Value indicating the success, or not, of the operation. Can be either true or null',
+                      type: 'boolean',
+                    },
                     name: {
                       description: 'Guild\'s name',
                       type: 'string',
@@ -762,6 +745,36 @@ Consider supporting The Slothpixel Project on Patreon to help cover the hosting 
                     description: {
                       description: 'Guild description',
                       type: 'string',
+                    },
+                    guild_master: {
+                      description: 'Member object of the guild master',
+                      type: 'object',
+                      properties: {
+                        uuid: {
+                          description: 'Player UUID',
+                          type: 'string',
+                        },
+                        rank: {
+                          description: 'Player rank in the guild',
+                          type: 'string',
+                        },
+                        joined: {
+                          description: 'Member join date',
+                          type: 'integer',
+                        },
+                        quest_participation: {
+                          description: 'How many much the member has contributed to guild quests',
+                          type: 'integer',
+                        },
+                        exp_history: {
+                          description: 'Contains raw guild xp earned in the past week. Uses format YYYY-MM-DD.',
+                          type: 'object',
+                        },
+                        muted_till: {
+                          description: 'Date the member is muted until',
+                          type: 'integer',
+                        },
+                      },
                     },
                     preferred_games: {
                       description: 'Array containing the guild\'s preferred games',
@@ -840,8 +853,14 @@ Consider supporting The Slothpixel Project on Patreon to help cover the hosting 
         },
         route: () => '/guilds/:player',
         func: async (request, response, callback) => {
+          let id;
           try {
-            const guild = await getGuildFromPlayer(request.params.player, { shouldPopulatePlayers: request.query.populatePlayers });
+            id = await getUUID(request.params.player);
+          } catch {
+            return response.status(404).json({ error: 'Invalid username' });
+          }
+          try {
+            const guild = await buildGuild('player', id, { shouldPopulatePlayers: request.query.populatePlayers });
             if (guild.guild === null) {
               return response.status(404).json(guild);
             }
@@ -871,6 +890,10 @@ Consider supporting The Slothpixel Project on Patreon to help cover the hosting 
                 schema: {
                   type: 'object',
                   properties: {
+                    guild: {
+                      description: 'Value indicating the success, or not, of the operation. Can be either true or null',
+                      type: 'boolean',
+                    },
                     name: {
                       description: 'Guild\'s name',
                       type: 'string',
@@ -919,6 +942,36 @@ Consider supporting The Slothpixel Project on Patreon to help cover the hosting 
                       description: 'Guild description',
                       type: 'string',
                     },
+                    guild_master: {
+                      description: 'Member object of the guild master',
+                      type: 'object',
+                      properties: {
+                        uuid: {
+                          description: 'Player UUID',
+                          type: 'string',
+                        },
+                        rank: {
+                          description: 'Player rank in the guild',
+                          type: 'string',
+                        },
+                        joined: {
+                          description: 'Member join date',
+                          type: 'integer',
+                        },
+                        quest_participation: {
+                          description: 'How many much the member has contributed to guild quests',
+                          type: 'integer',
+                        },
+                        exp_history: {
+                          description: 'Contains raw guild xp earned in the past week. Uses format YYYY-MM-DD.',
+                          type: 'object',
+                        },
+                        muted_till: {
+                          description: 'Date the member is muted until',
+                          type: 'integer',
+                        },
+                      },
+                    },
                     preferred_games: {
                       description: 'Array containing the guild\'s preferred games',
                       type: 'array',
@@ -956,7 +1009,7 @@ Consider supporting The Slothpixel Project on Patreon to help cover the hosting 
                       },
                     },
                     members: {
-                      description: 'Array playerof players on the guild',
+                      description: 'Array of players in the guild',
                       type: 'array',
                       items: {
                         type: 'object',
@@ -997,7 +1050,7 @@ Consider supporting The Slothpixel Project on Patreon to help cover the hosting 
         route: () => '/guilds/name/:name',
         func: async (request, response, callback) => {
           try {
-            const guild = await getGuildFromName(request.params.name, { shouldPopulatePlayers: request.query.populatePlayers });
+            const guild = await buildGuild('name', request.params.name, { shouldPopulatePlayers: request.query.populatePlayers });
             if (guild.guild === null) {
               return response.status(404).json(guild);
             }
@@ -1010,8 +1063,8 @@ Consider supporting The Slothpixel Project on Patreon to help cover the hosting 
     },
     '/guilds/id/{guildID}': {
       get: {
-        summary: 'Get guild stats by the name of the guild',
-        description: 'Look up a guild from the its name',
+        summary: 'Get guild stats by the internal ID of the guild',
+        description: 'Look up a guild from the its ID',
         operationId: 'guild',
         tags: [
           'guild',
@@ -1027,6 +1080,10 @@ Consider supporting The Slothpixel Project on Patreon to help cover the hosting 
                 schema: {
                   type: 'object',
                   properties: {
+                    guild: {
+                      description: 'Value indicating the success, or not, of the operation. Can be either true or null',
+                      type: 'boolean',
+                    },
                     name: {
                       description: 'Guild\'s name',
                       type: 'string',
@@ -1074,6 +1131,36 @@ Consider supporting The Slothpixel Project on Patreon to help cover the hosting 
                     description: {
                       description: 'Guild description',
                       type: 'string',
+                    },
+                    guild_master: {
+                      description: 'Member object of the guild master',
+                      type: 'object',
+                      properties: {
+                        uuid: {
+                          description: 'Player UUID',
+                          type: 'string',
+                        },
+                        rank: {
+                          description: 'Player rank in the guild',
+                          type: 'string',
+                        },
+                        joined: {
+                          description: 'Member join date',
+                          type: 'integer',
+                        },
+                        quest_participation: {
+                          description: 'How many much the member has contributed to guild quests',
+                          type: 'integer',
+                        },
+                        exp_history: {
+                          description: 'Contains raw guild xp earned in the past week. Uses format YYYY-MM-DD.',
+                          type: 'object',
+                        },
+                        muted_till: {
+                          description: 'Date the member is muted until',
+                          type: 'integer',
+                        },
+                      },
                     },
                     preferred_games: {
                       description: 'Array containing the guild\'s preferred games',
@@ -1153,7 +1240,7 @@ Consider supporting The Slothpixel Project on Patreon to help cover the hosting 
         route: () => '/guilds/id/:id',
         func: async (request, response, callback) => {
           try {
-            const guild = await getGuildFromID(request.params.id, { shouldPopulatePlayers: request.query.populatePlayers });
+            const guild = await buildGuild('id', request.params.id, { shouldPopulatePlayers: request.query.populatePlayers });
             if (guild.guild === null) {
               return response.status(404).json(guild);
             }
@@ -1165,80 +1252,82 @@ Consider supporting The Slothpixel Project on Patreon to help cover the hosting 
       },
     },
     /*
-      '/sessions/{playerName}': {
-        get: {
-          tags: [
-            'session',
-          ],
-          summary: 'Get guild stats by user\'s username or uuid',
-          parameters: [
-            playerNameParam,
-          ],
-          responses: {
-            200: {
-              description: 'successful operation',
-              content: {
-                'application/json': {
-                  schema: {
-                    type: 'object',
-                    properties: {
-                      game: {
-                        description: 'Minigame in standard format',
-                        type: 'string',
-                      },
-                      server: {
-                        description: 'Player\'s current server, e.g. mini103M',
-                        type: 'string',
-                      },
-                      players: {
-                        description: 'Array of players on the same server',
-                        type: 'array',
-                        items: {
-                          description: 'Player uuid',
-                          type: 'string',
-                        },
-                      },
-                    },
-                  },
-                },
-              },
-            },
-          },
-          route: () => '/sessions/:player',
-          func: (req, res, cb) => {},
-        },
-      },
-        '/friends/{playerName}': {
-          get: {
-            tags: [
-              'friends',
-            ],
-            summary: 'Get player\'s friends by user\'s username or uuid',
-            parameters: [
-              playerNameParam,
-              },
-            ],
-            responses: {
-              200: {
-                description: 'successful operation',
-                content: {
-                  'application/json': {
-                    schema: {
-                      type: 'array',
-                      items: {
+          '/sessions/{playerName}': {
+            get: {
+              tags: [
+                'session',
+              ],
+              summary: 'Get guild stats by user\'s username or uuid',
+              parameters: [
+                playerNameParam,
+              ],
+              responses: {
+                200: {
+                  description: 'successful operation',
+                  content: {
+                    'application/json': {
+                      schema: {
                         type: 'object',
                         properties: {
-                          uuid: {
-                            description: 'Friend\'s uuid',
+                          game: {
+                            description: 'Minigame in standard format',
                             type: 'string',
                           },
-                          sent_by: {
-                            description: 'UUID of the player who sent the friend request',
+                          server: {
+                            description: 'Player\'s current server, e.g. mini103M',
                             type: 'string',
                           },
-                          started: {
-                            description: 'Date the friendship started',
-                            type: 'integer',
+                          players: {
+                            description: 'Array of players on the same server',
+                            type: 'array',
+                            items: {
+                              description: 'Player uuid',
+                              type: 'string',
+                            },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+              route: () => '/sessions/:player',
+              func: (req, res, cb) => {},
+            },
+          },
+            '/friends/{playerName}': {
+              get: {
+                tags: [
+                  'friends',
+                ],
+                summary: 'Get player\'s friends by user\'s username or uuid',
+                parameters: [
+                  playerNameParam,
+                  },
+                ],
+                responses: {
+                  200: {
+                    description: 'successful operation',
+                    content: {
+                      'application/json': {
+                        schema: {
+                          type: 'array',
+                          items: {
+                            type: 'object',
+                            properties: {
+                              uuid: {
+                                description: 'Friend\'s uuid',
+                                type: 'string',
+                              },
+                              sent_by: {
+                                description: 'UUID of the player who sent the friend request',
+                                type: 'string',
+                              },
+                              started: {
+                                description: 'Date the friendship started',
+                                type: 'integer',
+                              },
+                            },
                           },
                         },
                       },
@@ -1247,9 +1336,7 @@ Consider supporting The Slothpixel Project on Patreon to help cover the hosting 
                 },
               },
             },
-          },
-        },
-        */
+            */
     '/skyblock/profiles/{playerName}': {
       get: {
         summary: 'Get list of player\'s skyblock profiles',
@@ -1505,6 +1592,9 @@ Consider supporting The Slothpixel Project on Patreon to help cover the hosting 
                                     },
                                   },
                                 },
+                                total_dragon_kills: {
+                                  type: 'integer',
+                                },
                                 deaths: {
                                   type: 'object',
                                   properties: {
@@ -1724,6 +1814,9 @@ Consider supporting The Slothpixel Project on Patreon to help cover the hosting 
                                     level: {
                                       type: 'integer',
                                     },
+                                    floatLevel: {
+                                      type: 'number',
+                                    },
                                     maxLevel: {
                                       type: 'integer',
                                     },
@@ -1739,6 +1832,9 @@ Consider supporting The Slothpixel Project on Patreon to help cover the hosting 
                                   },
                                 },
                               },
+                            },
+                            average_skill_level: {
+                              type: 'number',
                             },
                             collection: {
                               type: 'object',
@@ -1795,6 +1891,9 @@ Consider supporting The Slothpixel Project on Patreon to help cover the hosting 
                                           type: 'integer',
                                         },
                                         4: {
+                                          type: 'integer',
+                                        },
+                                        5: {
                                           type: 'integer',
                                         },
                                       },
@@ -1893,6 +1992,9 @@ Consider supporting The Slothpixel Project on Patreon to help cover the hosting 
                         },
                       },
                     },
+                    cute_name: {
+                      type: 'string',
+                    },
                   },
                 },
               },
@@ -1907,7 +2009,7 @@ Consider supporting The Slothpixel Project on Patreon to help cover the hosting 
               // TODO: Update when buildProfile changed
               const profile = await buildProfile(uuid, request.params.profile);
               try {
-                const players = await populatePlayers(Object.keys(profile.members).map((uuid) => ({ uuid })));
+                const players = await populatePlayers(Object.keys(profile.members || {}).map((uuid) => ({ uuid })));
                 players.forEach((player) => {
                   profile.members[player.profile.uuid].player = player.profile;
                 });
@@ -1926,77 +2028,59 @@ Consider supporting The Slothpixel Project on Patreon to help cover the hosting 
     },
     '/skyblock/auctions': {
       get: {
-        summary: 'Query all skyblock auctions',
-        description: 'Allows you to query all auctions and filter the results based on things such as item, rarity, enchantments or date.',
+        summary: 'Query active skyblock auctions',
+        description: 'Allows you to query active auctions and filter the results based on things such as item ID, rarity, bin or category.',
         operationId: 'getSkyblockAuctions',
         tags: [
           'skyblock',
         ],
         parameters: [
-          filterParam, limitParam, pageParam, activeParam, auctionUUIDParam, itemUUIDParam, sortOrderParam, {
+          limitParam, pageParam, auctionUUIDParam, sortOrderParam, {
             name: 'sortBy',
             in: 'query',
-            description: 'Which stat to sort records by. Requires the full path when used with nested objects like stats.Arcade.wins',
-            required: true,
+            description: 'Which field to sort records by. Choosing to sort by a custom field may lead to slow queries.',
+            required: false,
             schema: {
               type: 'string',
+              default: 'end',
             },
           },
           {
             name: 'id',
             in: 'query',
-            description: 'Item id, e.g. HOT_POTATO_BOOK. All available item ids can be found on the [items endpoint](https://api.slothpixel.me/api/skyblock/items).',
+            description: 'Item id, e.g. NEW_YEAR_CAKE. All available item ids can be found on the [items endpoint](https://api.slothpixel.me/api/skyblock/items).',
             required: false,
             schema: {
               type: 'string',
             },
           },
-        ],
-        responses: {
-          200: {
-            description: 'successful operation',
-            content: {
-              'application/json': {
-                schema: {
-                  type: 'array',
-                  items: auctionObject,
-                },
-              },
-            },
-          },
-        },
-        route: () => '/skyblock/auctions',
-        func: async (request, response) => {
-          return response.status(503).json({ error: 'Endpoint disabled for maintenance' });
-          /*
-            try {
-              const auctions = await getAuctions(request.query);
-              response.json(auctions);
-            } catch (error) {
-              response.status(400).json({ error });
-            }
-             */
-        },
-      },
-    },
-    '/skyblock/auctions/{itemId}': {
-      get: {
-        summary: 'Query past skyblock auctions and their stats by item',
-        description: 'Allows you to query past auctions for an item within specified time range. Also returns some statistical constants for this data.',
-        operationId: 'getSkyblockAuctionItem',
-        tags: [
-          'skyblock',
-        ],
-        parameters: [
-          itemIdParam, fromParam, toParam,
           {
-            name: 'showAuctions',
+            name: 'bin',
             in: 'query',
-            description: 'Returns the specified auctions individually',
+            description: 'When `true`, returns only bin auctions and when `false`, returns only normal auctions. Both types are returned if the parameter is not specified.',
             required: false,
-            default: false,
             schema: {
               type: 'boolean',
+            },
+          },
+          {
+            name: 'rarity',
+            in: 'query',
+            description: 'Filter by item rarity',
+            required: false,
+            schema: {
+              type: 'enum',
+              enum: ['COMMON', 'UNCOMMON', 'RARE', 'EPIC', 'LEGENDARY', 'MYTHIC', 'DIVINE', 'SUPREME', 'SPECIAL', 'VERY_SPECIAL'],
+            },
+          },
+          {
+            name: 'category',
+            in: 'query',
+            description: 'Filter by item category',
+            required: false,
+            schema: {
+              type: 'enum',
+              enum: ['accessories', 'armor', 'blocks', 'consumables', 'misc', 'weapon'],
             },
           },
         ],
@@ -2008,43 +2092,18 @@ Consider supporting The Slothpixel Project on Patreon to help cover the hosting 
                 schema: {
                   type: 'object',
                   properties: {
-                    average_price: {
-                      description: 'Average price in the selected time period',
+                    last_updated: {
                       type: 'integer',
                     },
-                    median_price: {
-                      description: 'Median price in the selected time period',
+                    total_auctions: {
                       type: 'integer',
                     },
-                    standard_deviation: {
-                      description: 'Standard deviation of prices in the selected time period',
-                      type: 'integer',
-                    },
-                    min_price: {
-                      description: 'Lowest price in the selected time period',
-                      type: 'integer',
-                    },
-                    max_price: {
-                      description: 'Largest price in the selected time period',
-                      type: 'integer',
-                    },
-                    lowest_bin: {
-                      description: 'Lowest price in the selected time period on Buy It Now',
-                      type: 'integer',
-                    },
-                    sold: {
-                      description: 'Total sold items in the selected time period',
+                    matching_query: {
                       type: 'integer',
                     },
                     auctions: {
-                      description: '',
-                      type: 'object',
-                      properties: {
-                        1577033426093: {
-                          type: 'object',
-                          description: 'Auction object',
-                        },
-                      },
+                      type: 'array',
+                      items: auctionObject,
                     },
                   },
                 },
@@ -2052,14 +2111,13 @@ Consider supporting The Slothpixel Project on Patreon to help cover the hosting 
             },
           },
         },
-        route: () => '/skyblock/auctions/:id',
-        func: async (request, response, callback) => {
-          const { from, to, showAuctions } = request.query;
+        route: () => '/skyblock/auctions',
+        func: async (request, response) => {
           try {
-            const result = await queryAuctionId(from, to, showAuctions, request.params.id);
-            response.json(result);
+            const auctions = await getAuctions(request.query);
+            response.json(auctions);
           } catch (error) {
-            callback(response.status(404).json({ error: error.message }));
+            response.status(400).json({ error: error.message });
           }
         },
       },
@@ -2241,6 +2299,172 @@ Consider supporting The Slothpixel Project on Patreon to help cover the hosting 
         },
       },
     },
+    '/skyblock/events': {
+      get: {
+        summary: 'SkyBlock event spec',
+        description: 'Returns SkyBlock events. Use key for the events parameter in /calendar/events endpoint',
+        operationId: 'getSkyblockEvents',
+        tags: [
+          'skyblock',
+        ],
+        responses: {
+          200: {
+            description: 'successful operation',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    EVENT_ENUM: {
+                      description: 'The cleaner name of the event. Use key for the events parameter in /calendar/events endpoint',
+                      type: 'string',
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        route: () => '/skyblock/events',
+        func: (_, response) => {
+          response.json(buildSkyblockEvents());
+        },
+      },
+    },
+    '/skyblock/calendar': {
+      get: {
+        summary: 'Get Skyblock calendar information',
+        description: 'Returns information about the SkyBlock calendar',
+        operationId: 'getSkyblockCalendar',
+        tags: [
+          'skyblock',
+        ],
+        parameters: [
+          calendarEventsParam, calendarFromParam, calendarToParam, calendarYearsParam, calendarStopAtYearEndParam,
+        ],
+        responses: {
+          200: {
+            description: 'successful operation',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    from: {
+                      description: 'The timestamp of the \'from\' parameter',
+                      type: 'integer',
+                    },
+                    to: {
+                      description: 'The timestamp of the \'to\' parameter',
+                      type: 'integer',
+                    },
+                    date: {
+                      description: 'The date based on \'from\' parameter, e.g Early Winter 14th',
+                      type: 'string',
+                    },
+                    day: {
+                      description: 'The current day based on \'from\' parameter',
+                      type: 'integer',
+                    },
+                    month: {
+                      description: 'The current month based on \'from\' parameter',
+                      type: 'string',
+                    },
+                    year: {
+                      description: 'The current year based on \'from\' parameter',
+                      type: 'integer',
+                    },
+                    time: {
+                      description: 'The current time based on \'from\' parameter',
+                      type: 'string',
+                    },
+                    minute: {
+                      description: 'The current minute based on \'from\' parameter',
+                      type: 'integer',
+                    },
+                    hour: {
+                      description: 'The current hour based on \'from\' parameter',
+                      type: 'integer',
+                    },
+                    next_day_countdown: {
+                      description: 'The time until the next day based on \'from\' parameter',
+                      type: 'integer',
+                    },
+                    next_month_countdown: {
+                      description: 'The time until the next month based on \'from\' parameter',
+                      type: 'integer',
+                    },
+                    next_year_countdown: {
+                      description: 'The time until the next year based on \'from\' parameter',
+                      type: 'integer',
+                    },
+                    events: {
+                      type: 'object',
+                      properties: {
+                        EVENT_ENUM: {
+                          type: 'object',
+                          properties: {
+                            name: {
+                              description: 'The cleaner name of the event',
+                              type: 'string',
+                            },
+                            duration: {
+                              description: 'The time the event is active',
+                              type: 'integer',
+                            },
+                            events: {
+                              type: 'array',
+                              items: {
+                                type: 'object',
+                                properties: {
+                                  start_timestamp: {
+                                    description: 'The starting timestamp of the event',
+                                    type: 'integer',
+                                  },
+                                  end_timestamp: {
+                                    description: 'The ending timestamp of the event',
+                                    type: 'integer',
+                                  },
+                                  starting_in: {
+                                    description: 'The time until the event starts',
+                                    type: 'integer',
+                                  },
+                                  ending_in: {
+                                    description: 'The time until the event ends',
+                                    type: 'integer',
+                                  },
+                                  pet: {
+                                    description: 'The type of pet if the event is a Traveling Zoo',
+                                    type: 'string',
+                                  },
+                                },
+                              },
+                            },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        route: () => '/skyblock/calendar',
+        func: (request, response) => {
+          const {
+            events, from, to, years, stopatyearend,
+          } = request.query;
+          try {
+            const result = buildSkyblockCalendar(events, from, to, years, stopatyearend);
+            response.json(result);
+          } catch (error) {
+            response.status(400).json({ error: error.message });
+          }
+        },
+      },
+    },
+    /*
     '/leaderboards': {
       get: {
         summary: 'Allows query of dynamic leaderboards',
@@ -2271,14 +2495,12 @@ Consider supporting The Slothpixel Project on Patreon to help cover the hosting 
         route: () => '/leaderboards',
         func: (request, response) => {
           return response.status(503).json({ error: 'Endpoint disabled for maintenance' });
-          /*
-            leaderboards(request.query, null, (error, lb) => {
-              if (error) {
-                return response.status(400).json({ error });
-              }
-              return response.json(lb);
-            });
-             */
+                      leaderboards(request.query, null, (error, lb) => {
+                        if (error) {
+                          return response.status(400).json({ error });
+                        }
+                        return response.json(lb);
+                      });
         },
       },
     },
@@ -2312,17 +2534,16 @@ Consider supporting The Slothpixel Project on Patreon to help cover the hosting 
         route: () => '/leaderboards/:template',
         func: (request, response, callback) => {
           return response.status(503).json({ error: 'Endpoint disabled for maintenance' });
-          /*
-            leaderboards(request.query, request.params.template, (error, lb) => {
-              if (error) {
-                return callback(response.status(400).json({ error }));
-              }
-              return response.json(lb);
-            });
-             */
+                      leaderboards(request.query, request.params.template, (error, lb) => {
+                        if (error) {
+                          return callback(response.status(400).json({ error }));
+                        }
+                        return response.json(lb);
+                      });
         },
       },
     },
+    */
     '/boosters': {
       get: {
         summary: 'Get list of network boosters',
@@ -2589,6 +2810,7 @@ Consider supporting The Slothpixel Project on Patreon to help cover the hosting 
         },
       },
     },
+    /*
     '/metadata': {
       get: {
         summary: 'GET /metadata',
@@ -2656,6 +2878,7 @@ Consider supporting The Slothpixel Project on Patreon to help cover the hosting 
         },
       },
     },
+     */
   },
 };
 

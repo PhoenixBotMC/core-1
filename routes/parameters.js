@@ -100,17 +100,22 @@ module.exports = {
     description: 'Define sort order. `asc` for ascending or `desc` for descending',
     required: false,
     schema: {
-      type: 'string',
+      type: 'enum',
       default: 'desc',
+      enum: [
+        'desc',
+        'asc',
+      ],
     },
   },
   limitParam: {
     name: 'limit',
     in: 'query',
-    description: 'Limit number of records returned. Default is 100 and maximum 1000.',
+    description: 'Limit number of records returned. Largest allowed value is 1000.',
     required: false,
     schema: {
       type: 'integer',
+      default: 1000,
     },
   },
   filterParam: {
@@ -142,15 +147,6 @@ module.exports = {
       type: 'string',
     },
   },
-  itemUUIDParam: {
-    name: 'itemUUID',
-    in: 'query',
-    description: 'Item uuid, e.g. "b8b9b051-e17f-4eb8-8b57-0a41a7d8eb72"',
-    required: false,
-    schema: {
-      type: 'string',
-    },
-  },
   activeParam: {
     name: 'active',
     in: 'query',
@@ -167,15 +163,6 @@ module.exports = {
     required: false,
     schema: {
       type: 'integer',
-    },
-  },
-  itemIdParam: {
-    name: 'itemId',
-    in: 'path',
-    description: 'Item id, e.g. BAT_RING. All available item ids can be found on the [items endpoint](https://api.slothpixel.me/api/skyblock/items).',
-    required: true,
-    schema: {
-      type: 'string',
     },
   },
   bazaarItemIdParam: {
@@ -214,6 +201,54 @@ module.exports = {
     required: false,
     schema: {
       type: 'string',
+    },
+  },
+  calendarEventsParam: {
+    name: 'events',
+    in: 'query',
+    description: 'The specific events you want to view the times. If left blank, will return all events. Multiple events separated by commas.',
+    required: false,
+    schema: {
+      type: 'string',
+    },
+  },
+  calendarFromParam: {
+    name: 'from',
+    in: 'query',
+    description: 'Date from which to get events. Uses a Unix timestamp with milliseconds or a [custom date string](https://github.com/slothpixel/core/wiki/Using-custom-date-parameters). E.g. to get past 24 hours, use `now-1d`.',
+    required: false,
+    default: 'now',
+    schema: {
+      type: 'string',
+    },
+  },
+  calendarToParam: {
+    name: 'to',
+    in: 'query',
+    description: 'Date to get calendar events until to. Uses a Unix timestamp with milliseconds or a [custom date string](https://github.com/slothpixel/core/wiki/Using-custom-date-parameters). E.g. to reference the date 3 hours ago, use `now-3h`.',
+    required: false,
+    default: 'now',
+    schema: {
+      type: 'string',
+    },
+  },
+  calendarYearsParam: {
+    name: 'years',
+    in: 'query',
+    description: 'The amount of Skyblock years to query.',
+    required: false,
+    schema: {
+      type: 'integer',
+    },
+  },
+  calendarStopAtYearEndParam: {
+    name: 'stopatyearend',
+    in: 'query',
+    description: 'Whether to stop the data at the year end. If true, will only show data until the end of the current Skyblock year, otherwise will return the full year starting from the \'from\' timestamp, possibly including part of the next year.',
+    default: false,
+    required: false,
+    schema: {
+      type: 'boolean',
     },
   },
 };

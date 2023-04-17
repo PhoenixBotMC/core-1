@@ -9,10 +9,6 @@ const playerObject = {
       description: 'Player username',
       type: 'string',
     },
-    name_history: {
-      description: 'History of usernames the user has joined Hypixel with',
-      type: 'array',
-    },
     online: {
       description: 'Is player online',
       type: 'boolean',
@@ -66,6 +62,10 @@ const playerObject = {
       description: 'Total coins across all minigames',
       type: 'integer',
     },
+    total_games_played: {
+      description: 'Total games played across all minigames',
+      type: 'integer',
+    },
     mc_version: {
       description: 'Minecraft version the user last logged on Hypixel with',
       type: 'string',
@@ -97,6 +97,10 @@ const playerObject = {
     gifts_received: {
       description: 'Total gifts received from other players',
       type: 'integer',
+    },
+    ranks_sent: {
+      description: 'Total ranks sent to other players',
+      type: 'integer'
     },
     is_contributor: {
       description: 'Whether player is a contributor to Slothpixel',
@@ -172,6 +176,10 @@ const playerObject = {
         },
         HYPIXEL: {
           description: 'Link to Hypixel Forums profile',
+          type: 'string',
+        },
+        TIKTOK: {
+          description: 'Link to TikTok profile',
           type: 'string',
         },
       },

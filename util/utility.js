@@ -1,3 +1,4 @@
+/* eslint-disable no-await-in-loop */
 /**
  * Provides utility functions.
  * All functions should have external dependencies (DB, etc.) passed as parameters
@@ -7,6 +8,7 @@ const { fromPromise } = require('universalify');
 const urllib = require('url');
 const { v4: uuidV4 } = require('uuid');
 const moment = require('moment');
+const wait = require('util').promisify(setTimeout);
 const { createLogger, format, transports } = require('winston');
 const got = require('got');
 const config = require('../config');
@@ -77,7 +79,6 @@ function getMonthlyStat(a, b) {
 }
 
 function fromEntries(array) {
-  // eslint-disable-next-line unicorn/no-reduce
   return array.reduce((object, [key, value]) => {
     object[key] = value;
     return object;
@@ -131,6 +132,14 @@ function DBToStandardName(name = '') {
 function typeToStandardName(name) {
   const result = constants.game_types.find((game) => game.type_name === name);
   return result === undefined ? name : result.standard_name;
+}
+
+/**
+ * Converts minigame types into clean names e.g. TNTGAMES => TNT Games
+ */
+function typeToCleanName(name) {
+  const result = constants.game_types.find((game) => game.type_name === name);
+  return result === undefined ? name : result.clean_name;
 }
 
 /**
@@ -233,22 +242,17 @@ function generateJob(type, payload) {
         url: `${apiUrl}/counts?key=${apiKey}`,
       };
     },
-    findguild() {
+    guildByPlayer() {
       return {
-        url: `${apiUrl}/findguild?key=${apiKey}&byUuid=${payload.id}`,
+        url: `${apiUrl}/guild?key=${apiKey}&player=${payload.id}`,
       };
     },
-    findguildByName() {
+    guildByName() {
       return {
-        url: `${apiUrl}/findguild?key=${apiKey}&byName=${payload.id}`,
+        url: `${apiUrl}/guild?key=${apiKey}&name=${payload.id}`,
       };
     },
-    friends() {
-      return {
-        url: `${apiUrl}/friends?key=${apiKey}&uuid=${payload.id}`,
-      };
-    },
-    guild() {
+    guildById() {
       return {
         url: `${apiUrl}/guild?key=${apiKey}&id=${payload.id}`,
       };
@@ -273,6 +277,11 @@ function generateJob(type, payload) {
         url: `${apiUrl}/skyblock/auctions?page=${payload.page}`,
       };
     },
+    skyblock_auctions_ended() {
+      return {
+        url: `${apiUrl}/skyblock/auctions_ended`,
+      };
+    },
     skyblock_profiles() {
       return {
         url: `${apiUrl}/skyblock/profiles?key=${apiKey}&uuid=${payload.id}`,
@@ -281,6 +290,11 @@ function generateJob(type, payload) {
     skyblock_profile() {
       return {
         url: `${apiUrl}/skyblock/profile?key=${apiKey}&profile=${payload.id}`,
+      };
+    },
+    skyblock_items() {
+      return {
+        url: `${apiUrl}/resources/skyblock/items`,
       };
     },
     status() {
@@ -325,7 +339,7 @@ const getData = fromPromise(async (redis, url) => {
 
   const urlData = urllib.parse(url.url, true);
   const isHypixelApi = urlData.host === 'api.hypixel.net';
-  const isMojangApi = urlData.host === 'playerdb.co';
+  const isMojangApi = urlData.host === 'ashcon.app';
 
   const target = urllib.format(urlData);
 
@@ -424,19 +438,66 @@ function generateFormattedRank(rank, plusColor, prefix, plusPlusColor) {
 }
 
 function invokeInterval(func, delay) {
-  // invokes the function immediately, waits for callback, waits the delay, and then calls it again
-  (function invoker() {
-    logger.info(`running ${func.name}`);
+  // invokes the function immediately, waits for promise, waits the delay, and then calls it again
+  (async function invoker() {
+    logger.info(`[invokeInterval] Running ${func.name}`);
     const start = Date.now();
-    return func((error) => {
-      if (error) {
-        // log the error, but wait until next interval to retry
-        logger.error(error);
-      }
-      logger.info(`${func.name}: ${Date.now() - start}ms`);
-      setTimeout(invoker, delay);
-    });
+    try {
+      await func();
+    } catch (error) {
+      // log the error, but wait until next interval to retry
+      logger.error(error);
+    }
+    logger.info(`[invokeInterval] ${func.name}: ${Date.now() - start} ms`);
+    setTimeout(invoker, delay);
   }());
+}
+
+/*
+* Function to sync intervals with Hypixel API updates/caching
+* Used by auctions and bazaar services
+ */
+async function syncInterval(test, fun, interval = 60000, retest = false) {
+  let lastUpdated = await test();
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    let next = lastUpdated + interval;
+    let waitMs = next - Date.now();
+    while (waitMs < 0) {
+      logger.debug('Cache persisting longer than 60 seconds! Waiting...');
+      await wait(1000);
+      lastUpdated = await test();
+      next = lastUpdated + interval;
+      waitMs = next - Date.now();
+    }
+    logger.info(`[syncInterval] waiting ${waitMs / 1000} seconds`);
+    await wait(waitMs);
+    const returned = await fun();
+    lastUpdated = retest ? await test() : (returned || await test());
+  }
+}
+
+function redisBulk(redis, command, keys, prefix, arguments_ = []) {
+  const pipeline = redis.pipeline();
+  keys.forEach((key) => {
+    if (prefix) {
+      key = `${prefix}:${key}`;
+    }
+    pipeline[command](key, ...arguments_);
+  });
+  return pipeline.exec();
+}
+
+function chunkArray(array, maxSize) {
+  const output = [];
+  for (let i = 0; i < array.length; i += maxSize) {
+    output.push(array.slice(i, i + maxSize));
+  }
+  return output;
+}
+
+function nth(n) {
+  return n + ['st', 'nd', 'rd'][((((n + 90) % 100) - 10) % 10) - 1] || `${n}th`;
 }
 
 module.exports = {
@@ -446,6 +507,7 @@ module.exports = {
   IDToStandardName,
   DBToStandardName,
   typeToStandardName,
+  typeToCleanName,
   isContributor,
   getNestedObjects,
   getPlayerFields,
@@ -454,6 +516,7 @@ module.exports = {
   getStartOfBlockMinutes,
   getEndOfMonth,
   redisCount,
+  redisBulk,
   getRedisCountDay,
   getRedisCountHour,
   removeDashes,
@@ -464,5 +527,8 @@ module.exports = {
   getMonthlyStat,
   pickKeys,
   invokeInterval,
+  syncInterval,
   fromEntries,
+  chunkArray,
+  nth,
 };
